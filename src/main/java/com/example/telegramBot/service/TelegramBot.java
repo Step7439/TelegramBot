@@ -1,8 +1,12 @@
 package com.example.telegramBot.service;
 
 import com.example.telegramBot.config.BotConfig;
+import com.example.telegramBot.model.Joke;
 import com.example.telegramBot.model.Users;
-import com.example.telegramBot.repo.RepozitoryTelegramBot;
+import com.example.telegramBot.repo.RepoJoke;
+import com.example.telegramBot.repo.RepoUsers;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.type.TypeFactory;
 import com.vdurmont.emoji.EmojiParser;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,7 +17,6 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.meta.api.objects.User;
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.commands.scope.BotCommandScopeDefault;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
@@ -21,17 +24,22 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMar
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
-import com.example.telegramBot.config.*;
 
+import java.io.File;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.Random;
 
 @Slf4j
 @Component
 public class TelegramBot extends TelegramLongPollingBot {
     static final String JAVA = "JAVA_BUTTON";
     static final String PYTHON = "PYTHON_BUTTON";
+
+    static final int JOKEID = 9;
+    static final String NEXT_JOKE = "NEXT";
     private final String HELP_BOT = "Настроикй бота и изменения профиля.\n" +
             "/start регистрация у бота.\n" +
             "/mydata посмотреть свой даные.\n" +
@@ -40,7 +48,9 @@ public class TelegramBot extends TelegramLongPollingBot {
     final BotConfig botConfig;
 
     @Autowired
-    private RepozitoryTelegramBot repozitoryTelegramBot;
+    private RepoUsers repoUsers;
+    @Autowired
+    private RepoJoke repoJoke;
 
     public TelegramBot(BotConfig botConfig) {
         this.botConfig = botConfig;
@@ -76,13 +86,13 @@ public class TelegramBot extends TelegramLongPollingBot {
 
             if (messagText.contains("/send") && botConfig.getAdminId() == chatId) {
                 var textToSend = EmojiParser.parseToUnicode(messagText.substring(messagText.indexOf(" ")));
-                var users = repozitoryTelegramBot.findAll();
+                var users = repoUsers.findAll();
                 for (Users user : users) {
                     sendMesseg(user.getId(), textToSend);
                 }
             } else {
                 switch (messagText) {
-                    case "/start":
+                    case "/start" -> {
                         try {
                             register(update.getMessage());
                         } catch (TelegramApiException e) {
@@ -90,30 +100,38 @@ public class TelegramBot extends TelegramLongPollingBot {
                         }
                         log.info("register user " + update.getMessage().getChat().getUserName());
                         startCommand(chatId, update.getMessage().getChat().getFirstName());
-                        break;
-                    case "/mydata":
+                        try {
+                            ObjectMapper objectMapper = new ObjectMapper();
+                            TypeFactory typeFactory = objectMapper.getTypeFactory();
+                            List<Joke> jokeList = objectMapper.readValue(new File("file/anecdotes.json"),
+                                    typeFactory.constructCollectionType(List.class, Joke.class));
+                            repoJoke.saveAll(jokeList);
+                        } catch (Exception e) {
+                            log.error("Error File" + e.getMessage());
+                        }
+                    }
+                    case "/mydata" -> {
                         sendMesseg(chatId, "User name : ");
                         mydataBot(update.getMessage().getChatId(), update.getMessage().getChat().getUserName());
                         sendMesseg(chatId, "First name : ");
                         mydataBot(update.getMessage().getChatId(), update.getMessage().getChat().getFirstName());
-                        break;
-                    case "/help":
-                        sendMessegMenu(keyboardMac, chatId, HELP_BOT);
-                        break;
-                    case "Погода":
-                        sendMessegMenu(keyboardMac, chatId, "Якутск -58");
-                        break;
-                    case "Валюта":
-                        sendMessegMenu(keyboardMac, chatId, "Долар : 33.05 рублей");
-                        break;
-                    case "Удолить профиль":
-                        deliteUser(update.getMessage().getChatId());
-                        break;
-                    case "Выбор языка":
-                        javaPythonButton(chatId);
-                        break;
-                    default:
-                        sendMesseg(chatId, "Я еще маленький и не все знаю!");
+                    }
+                    case "/help" -> sendMessegMenu(keyboardMac, chatId, HELP_BOT);
+
+                    case "Погода" -> sendMessegMenu(keyboardMac, chatId, "Якутск -58");
+
+                    case "Валюта" -> sendMessegMenu(keyboardMac, chatId, "Долар : 33.05 рублей");
+
+                    case "Удолить профиль" -> deliteUser(update.getMessage().getChatId());
+
+                    case "Выбор языка" -> javaPythonButton(chatId);
+
+                    case "Анекдоты" -> {
+                        var joke = getRandomJoke();
+                        joke.ifPresent(valueJoke -> jokeNextButton(valueJoke.getBody(), chatId));
+                    }
+
+                    default -> sendMesseg(chatId, "Я еще маленький и не все знаю!");
                 }
             }
         } else if (update.hasCallbackQuery()) {
@@ -121,18 +139,52 @@ public class TelegramBot extends TelegramLongPollingBot {
             long messageId = update.getCallbackQuery().getMessage().getMessageId();
             long chatId = update.getCallbackQuery().getMessage().getChatId();
 
-            if (callbackData.equals(JAVA)) {
-                String str = "Ваш любимый язык Java!!!";
-                executeEditMassag(str, chatId, messageId);
-            } else if (callbackData.equals(PYTHON)) {
-                String str = "Ваш любимый язык Python!!!";
-                executeEditMassag(str, chatId, messageId);
+            switch (callbackData) {
+                case JAVA -> {
+                    String str = "Ваш любимый язык Java!!!";
+                    executeEditMassag(str, chatId, messageId);
+                }
+                case PYTHON -> {
+                    String str = "Ваш любимый язык Python!!!";
+                    executeEditMassag(str, chatId, messageId);
+                }
+                case NEXT_JOKE -> {
+                    var joke = getRandomJoke();
+                    joke.ifPresent(valueJoke -> jokeNextButton(valueJoke.getBody(), chatId));
+                }
             }
-
         }
-
     }
 
+    private Optional<Joke> getRandomJoke() {
+        var r = new Random();
+        var randomId = r.nextInt(JOKEID) + 1;
+        return repoJoke.findById(randomId);
+    }
+    private void jokeNextButton(String joke, long chatId) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(joke);
+
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> listButton = new ArrayList<>();
+        List<InlineKeyboardButton> buttons = new ArrayList<>();
+
+        var jokeButton = new InlineKeyboardButton();
+
+        jokeButton.setText(EmojiParser.parseToUnicode("Следущий анекдот" + " \uD83E\uDD23"));
+        jokeButton.setCallbackData(NEXT_JOKE);
+
+        buttons.add(jokeButton);
+
+        listButton.add(buttons);
+        markup.setKeyboard(listButton);
+        message.setReplyMarkup(markup);
+
+
+        executeMessag(message);
+
+    }
     private void javaPythonButton(Long chatId) {
         SendMessage message = new SendMessage();
         message.setChatId(chatId);
@@ -164,24 +216,24 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void register(Message message) throws TelegramApiException {
-        if (repozitoryTelegramBot.findById(message.getChatId()).isEmpty()) {
+        if (repoUsers.findById(message.getChatId()).isEmpty()) {
             var chatId = message.getChatId();
             var chat = message.getChat();
             Users users = new Users();
             users.setId(chatId);
             users.setUsername(chat.getUserName());
             users.setTimestamp(new Timestamp(System.currentTimeMillis()));
-            repozitoryTelegramBot.save(users);
+            repoUsers.save(users);
         }
     }
 
     private void mydataBot(Long id, String user) {
-        repozitoryTelegramBot.findById(id);
+        repoUsers.findById(id);
         sendMesseg(id, user);
     }
 
     private void deliteUser(Long id) {
-        repozitoryTelegramBot.deleteById(id);
+        repoUsers.deleteById(id);
     }
 
     private void startCommand(long chatId, String name) {
@@ -214,6 +266,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         List<KeyboardRow> keyboardRows = new ArrayList<>();
         KeyboardRow row = new KeyboardRow();
 
+        row.add("Анекдоты");
         row.add("Погода");
         row.add("Валюта");
         keyboardRows.add(row);
