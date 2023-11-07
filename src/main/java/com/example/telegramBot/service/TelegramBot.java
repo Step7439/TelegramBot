@@ -100,15 +100,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                         }
                         log.info("register user " + update.getMessage().getChat().getUserName());
                         startCommand(chatId, update.getMessage().getChat().getFirstName());
-                        try {
-                            ObjectMapper objectMapper = new ObjectMapper();
-                            TypeFactory typeFactory = objectMapper.getTypeFactory();
-                            List<Joke> jokeList = objectMapper.readValue(new File("file/anecdotes.json"),
-                                    typeFactory.constructCollectionType(List.class, Joke.class));
-                            repoJoke.saveAll(jokeList);
-                        } catch (Exception e) {
-                            log.error("Error File" + e.getMessage());
-                        }
+
                     }
                     case "/mydata" -> {
                         sendMesseg(chatId, "User name : ");
@@ -127,6 +119,16 @@ public class TelegramBot extends TelegramLongPollingBot {
                     case "Выбор языка" -> javaPythonButton(chatId);
 
                     case "Анекдоты" -> {
+                        try {
+                            ObjectMapper objectMapper = new ObjectMapper();
+                            TypeFactory typeFactory = objectMapper.getTypeFactory();
+                            List<Joke> jokeList = objectMapper.readValue(new File("file/anecdotes.json"),
+                                    typeFactory.constructCollectionType(List.class, Joke.class));
+                            repoJoke.saveAll(jokeList);
+                        } catch (Exception e) {
+                            log.error("Error File" + e.getMessage());
+                        }
+
                         var joke = getRandomJoke();
                         joke.ifPresent(valueJoke -> jokeNextButton(valueJoke.getBody(), chatId));
                     }
@@ -150,7 +152,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 }
                 case NEXT_JOKE -> {
                     var joke = getRandomJoke();
-                    joke.ifPresent(valueJoke -> jokeNextButton(valueJoke.getBody(), chatId));
+                    joke.ifPresent(valueJoke -> jokeNextButtonWindows(valueJoke.getBody(), chatId, update.getCallbackQuery().getMessage().getMessageId()));
                 }
             }
         }
@@ -161,10 +163,38 @@ public class TelegramBot extends TelegramLongPollingBot {
         var randomId = r.nextInt(JOKEID) + 1;
         return repoJoke.findById(randomId);
     }
+
+    private void nextButton(SendMessage message) {
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> listButton = new ArrayList<>();
+        List<InlineKeyboardButton> buttons = new ArrayList<>();
+
+        var jokeButton = new InlineKeyboardButton();
+
+        jokeButton.setText(EmojiParser.parseToUnicode("Следущий анекдот" + " \uD83E\uDD23"));
+        jokeButton.setCallbackData(NEXT_JOKE);
+
+        buttons.add(jokeButton);
+
+        listButton.add(buttons);
+        markup.setKeyboard(listButton);
+        message.setReplyMarkup(markup);
+    }
+
     private void jokeNextButton(String joke, long chatId) {
         SendMessage message = new SendMessage();
         message.setChatId(chatId);
         message.setText(joke);
+
+        nextButton(message);
+        executeMessag(message);
+    }
+
+    private void jokeNextButtonWindows(String joke, long chatId, Integer messagerId) {
+        EditMessageText message = new EditMessageText();
+        message.setText(joke);
+        message.setChatId(chatId);
+        message.setMessageId(messagerId);
 
         InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
         List<List<InlineKeyboardButton>> listButton = new ArrayList<>();
@@ -181,10 +211,9 @@ public class TelegramBot extends TelegramLongPollingBot {
         markup.setKeyboard(listButton);
         message.setReplyMarkup(markup);
 
-
-        executeMessag(message);
-
+        executeMessagWindows(message);
     }
+
     private void javaPythonButton(Long chatId) {
         SendMessage message = new SendMessage();
         message.setChatId(chatId);
@@ -279,6 +308,14 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void executeMessag(SendMessage message) {
+        try {
+            execute(message);
+        } catch (TelegramApiException e) {
+            log.error("Error :" + e.getMessage());
+        }
+    }
+
+    private void executeMessagWindows(EditMessageText message) {
         try {
             execute(message);
         } catch (TelegramApiException e) {
